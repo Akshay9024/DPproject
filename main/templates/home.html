@@ -1,0 +1,226 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>River Flow Animation</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <!-- Bootstrap CSS for styling -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <style>
+        body {
+            background-color: #e3f2f9;
+            color: #004d4d;
+            font-family: 'Arial', sans-serif;
+        }
+        #map {
+            height: 500px;
+            width: 100%;
+            border: 1px solid #004d4d;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+        .container {
+            padding-top: 40px;
+            padding-bottom: 40px;
+        }
+        h2 {
+            color: #00796b;
+            margin-bottom: 20px;
+        }
+        .btn-danger {
+            background-color: #d32f2f;
+            border-color: #d32f2f;
+        }
+        .btn-danger:hover {
+            background-color: #b71c1c;
+            border-color: #b71c1c;
+        }
+        .text-center {
+            margin-top: 30px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2 class="text-center">Visi Flow - Discharge Rate</h2>
+
+        <!-- Add the plot first -->
+        <div style="max-width: 1200px; margin: 0 auto; padding: 20px;">
+            <canvas id="dischargePlot" height="650"></canvas>
+        </div>
+
+        <!-- Add another heading before the map starts -->
+        <h2 class="text-center">River Flow Animation</h2>
+
+        <!-- Then, the map -->
+        <div id="map"></div>
+
+        <!-- Welcome message -->
+        <h2 class="text-center">Welcome, {{ user.username }}!</h2>
+        <p class="text-center">This is the homepage. You are logged in.</p>
+
+        <!-- Logout button -->
+        <div class="text-center">
+            <a href="{% url 'logout' %}" class="btn btn-danger">Logout</a>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+
+    <script>
+        var map = L.map('map').setView([31.7758, 76.9828], 15);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        const flowLines = [];
+
+        function loadRiverFlowData() {
+            Papa.parse("{% static 'data/flowdata.csv' %}?v=" + new Date().getTime(), {
+                download: true,
+                header: true,
+                dynamicTyping: true,
+                complete: function(results) {
+                    animateFlow(results.data);
+                }
+            });
+        }
+
+        function animateFlow(data) {
+            data.forEach(function(point) {
+                var startLatLng = [point.latitude, point.longitude];
+                var flow_x = point.flow_x;
+                var flow_y = point.flow_y;
+
+                var magnitude = Math.sqrt(flow_x * flow_x + flow_y * flow_y);
+                var speedFactor = 1 + magnitude * 0.1;
+
+                var control1 = [startLatLng[0] + flow_y * 0.1, startLatLng[1] + flow_x * 0.1];
+                var control2 = [startLatLng[0] - flow_y * 0.1, startLatLng[1] + flow_x * 0.1];
+                var endLatLng = [startLatLng[0] + flow_y*2, startLatLng[1] + flow_x*2];
+
+                animateCurve(startLatLng, control1, control2, endLatLng, flow_x, flow_y, speedFactor);
+            });
+        }
+
+        function animateCurve(startLatLng, control1, control2, endLatLng, flow_x, flow_y, speedFactor) {
+            function getBezierPoint(t, p0, p1, p2, p3) {
+                const x = Math.pow(1 - t, 3) * p0[1] +
+                          3 * Math.pow(1 - t, 2) * t * p1[1] +
+                          3 * (1 - t) * Math.pow(t, 2) * p2[1] +
+                          Math.pow(t, 3) * p3[1];
+                const y = Math.pow(1 - t, 3) * p0[0] +
+                          3 * Math.pow(1 - t, 2) * t * p1[0] +
+                          3 * (1 - t) * Math.pow(t, 2) * p2[0] +
+                          Math.pow(t, 3) * p3[0];
+                return [y, x];
+            }
+
+            const curvePoints = [];
+            const segments = 50;
+            for (let i = 0; i <= segments; i++) {
+                const t = i / segments;
+                curvePoints.push(getBezierPoint(t, startLatLng, control1, control2, endLatLng));
+            }
+
+            const flowLine = L.polyline([], {
+                color: 'rgba(0, 0, 255, 0.3)',
+                weight: 1.5
+            }).addTo(map);
+
+            flowLines.push(flowLine);
+
+            let currentStep = 0;
+            const extensionSteps = 40;
+            const travelSteps = 60;
+            const travelDistance = speedFactor * 0.8;
+
+            function animateLine() {
+                if (currentStep < extensionSteps) {
+                    const progress = currentStep / extensionSteps;
+                    const currentPoints = curvePoints.slice(0, Math.floor(progress * segments));
+                    flowLine.setLatLngs(currentPoints);
+                } else if (currentStep < extensionSteps + travelSteps) {
+                    const travelProgress = (currentStep - extensionSteps) / travelSteps;
+                    const newStartLatLng = [
+                        startLatLng[0] + flow_y * travelDistance * travelProgress,
+                        startLatLng[1] + flow_x * travelDistance * travelProgress
+                    ];
+
+                    const newControl1 = [newStartLatLng[0] + flow_y * 0.2, newStartLatLng[1] + flow_x * 0.2];
+                    const newControl2 = [newStartLatLng[0] - flow_y * 0.2, newStartLatLng[1] + flow_x * 0.2];
+                    const newEndLatLng = [newStartLatLng[0] + flow_y*1.4, newStartLatLng[1] + flow_x*1.4];
+
+                    const newCurvePoints = [];
+                    for (let i = 0; i <= segments; i++) {
+                        const t = i / segments;
+                        newCurvePoints.push(getBezierPoint(t, newStartLatLng, newControl1, newControl2, newEndLatLng));
+                    }
+
+                    flowLine.setLatLngs(newCurvePoints);
+                } else {
+                    currentStep = 0;
+                }
+
+                currentStep += 0.5;
+                requestAnimationFrame(animateLine);
+            }
+
+            animateLine();
+        }
+
+        loadRiverFlowData();
+    </script>
+
+    <!-- Add this at the bottom of home.html -->
+    <div style="max-width: 1200px; margin: 0 auto; padding: 20px;">
+        <canvas id="dischargePlot" height="650"></canvas>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        var ctx = document.getElementById('dischargePlot').getContext('2d');
+        var timeSeries = {{ time_series|safe }};
+        var dischargeRateSeries = {{ discharge_rate_series|safe }};
+
+        var dischargePlot = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: timeSeries,
+                datasets: [{
+                    label: 'Discharge Rate',
+                    data: dischargeRateSeries,
+                    borderColor: '#6a737b',  // Softer grey line color
+                    backgroundColor: 'rgba(106, 115, 123, 0.1)',  // Light grey background for fill
+                    borderWidth: 2,  // Medium-thickness line
+                    pointBackgroundColor: '#6a737b',  // Grey data points
+                    pointBorderColor: '#ffffff',  // White border around points
+                    pointRadius: 3  // Slightly smaller data points
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        title: { display: true, text: 'Time', color: '#333', font: { family: 'Arial', size: 14 } },
+                        grid: { color: 'rgba(0, 0, 0, 0.05)' },  // Very subtle grid lines
+                        ticks: { color: '#333', font: { family: 'Arial', size: 12 } }
+                    },
+                    y: {
+                        title: { display: true, text: 'Discharge Rate', color: '#333', font: { family: 'Arial', size: 14 } },
+                        grid: { color: 'rgba(0, 0, 0, 0.05)' },
+                        ticks: { color: '#333', font: { family: 'Arial', size: 12 } }
+                    }
+                }
+            }
+        });
+    </script>
+
+</body>
+</html>
